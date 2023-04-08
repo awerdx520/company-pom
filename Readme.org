@@ -6,14 +6,14 @@
 
 这是一个 =company-mode= 后端插件，用于 =Maven= 项目的 =pom.xml= 文件内容的补全。
 
-灵感来源为 =Visual-studio-code= 的 [[https://code.visualstudio.com/docs/java/java-build][Java build tool in Vscode]] 中插件 [[https://github.com/microsoft/vscode-maven.git][vscode-maven]]
+灵感来源为 =visual-studio-code= 的 [[https://code.visualstudio.com/docs/java/java-build][Java build tool in Vscode]] 中插件 [[https://github.com/microsoft/vscode-maven.git][vscode-maven]]
 
 这是我的第一个 Emacs 插件，希望能给大家带来更多方便。
 
 * TODO Task
 - [x] 从本地仓库中获取不全候选
 - [_] 从 Maven Central 中心仓库获取补全候选
-- [_] 从 Neux 发布的 Index 文件中获取补全候选（这个应该不常用，因为那个文件太大了，大概有 1.7G 并且感觉没有什么大用）
+- [_] 从 Nexus 发布的 Index 文件中获取补全候选（这个应该不常用，因为那个文件太大了，大概有 1.7G 并且感觉没有什么大用）
 
 
 * Relation

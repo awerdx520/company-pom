@@ -17,13 +17,10 @@
 ;;
 ;;; Code:
 
-(require 'company)
 (require 'f)
 (require 's)
 (require 'dash)
-
-(when (not (>= emacs-version  "28.0"))
-  (error "当前 Emacs (%s) 版本过低，最低支持版本 28.0" emacs-version))
+(require 'company)
 
 (defgroup company-pom nil
   "Completion backend for Pom.xml."
@@ -55,9 +52,9 @@
 本地仓库位置可以通过 `comapny-pom-maven-user-local-repository`值设置。"
   (delete-dups
    (mapcar (lambda (group-id)
-             (string-replace "/" "."
-                             (s-left
-                              (car (car (s-matched-positions-all "\\(\\/[^/]*\\)\\{3\\}\\.pom$" group-id))) group-id)))
+             (s-replace "/" "."
+                        (s-left
+                         (car (car (s-matched-positions-all "\\(\\/[^/]*\\)\\{3\\}\\.pom$" group-id))) group-id)))
            (mapcar (lambda (group-dir)
                      (s-chop-left (length (f-full company-pom-maven-user-local-repository))
                                   group-dir))
@@ -70,49 +67,66 @@
                          (lambda ()
                            (setq company-pom-groupId-cache (company-pom--search-groupId)) ))))
 
+(defun company-pom--dependency-entries (&optional groupId artifactId)
+  "根据 `GROUPID' + `ARTIFACTID' 获取候选结果."
+  (if (not (s-blank? groupId))
+      (let ((parent (concat company-pom-maven-user-local-repository (s-replace "."  "/" groupId) "/" artifactId)))
+        (message "%s" parent)
+        (when (f-exists-p parent)
+          (f-uniquify (f-directories parent))))
+    (if (or company-pom-groupId-cache (seq-empty-p company-pom-groupId-cache))
+        (setq company-pom-groupId-cache (company-pom--search-groupId))
+      company-pom-groupId-cache)))
+
+(defvar company-pom-tag-regex
+  "<[[:alpha:]]+>[[:space:]]*\\([a-zA-Z0-9-_.]*\\)[[:space:]]*</[[:alpha:]]+>[\n \t]*"
+  "标签匹配正则表达式.")
+
+(defvar company-pom-prefix-regex  "<\\([[:alpha:]]+\\)>\\([a-zA-Z0-9-_. ]*\\)"
+  "当前 `point' 前缀+标签正则表达式.")
+
+(defun company-pom--grab-dependency-prefix ()
+  "获取当前位置的前缀 ."
+  (when (looking-back company-pom-prefix-regex)
+    (match-string-no-properties 2)))
+
+
+(defun company-pom--dependency-cnadidates (prefix)
+  "根据 `PREFIX' 用于 `company-mode' 获取依赖候选项."
+  (let* ((tag (when (looking-back company-pom-prefix-regex) (match-string-no-properties 1))))
+    (--filter (s-prefix? prefix it)
+              (pcase tag
+                ("groupId"
+                 (company-pom--dependency-entries))
+                ("artifactId"
+                 (when (looking-back (concat company-pom-tag-regex company-pom-prefix-regex))
+                   (company-pom--dependency-entries
+                    (match-string-no-properties 1))))
+                ("version"
+                 (when (looking-back
+                        (concat company-pom-tag-regex
+                                company-pom-tag-regex
+                                company-pom-prefix-regex))
+                   (company-pom--dependency-entries
+                    (match-string-no-properties 1)
+                    (match-string-no-properties 2))))
+                (_ nil)))))
+
+;;;###autoload
+(defun company-pom (command &optional arg &rest ignored)
+  "pom.xm 构建文件补全 backend."
+  (interactive (list 'interactive))
+  (cl-case command
+    (interactive (company-begin-backend 'company-pom))
+    (prefix (company-pom--grab-dependency-prefix))
+    (candidates
+     (company-pom--dependency-cnadidates arg))))
+
+;;;###autoload
 (defun company-pom-update-groupId-cache ()
   "更新 Maven GroupId 缓存."
   (interactive)
   (setq company-pom-groupId-cache (company-pom--search-groupId)))
-
-(defun company-pom--directories (parent)
-  "根据 `PARENT' 目录搜索子目录."
-  (when (f-exists-p parent)
-    (f-uniquify (f-directories parent))))
-
-(defun company-pom--get-artifactId-candidates (groupId)
-  "搜索本地仓库中对应的 GROUPID 的 artifactId.
-本地仓库位置可以通过 `comapny-pom-maven-user-local-repository' 值设置。"
-  (company-pom--directories
-   (concat company-pom-maven-user-local-repository (string-replace "." "/" groupId))))
-
-(defun company-pom--get-version-candidates (groupId artifactId)
-  "搜索本地仓库中 `GROUPID' + `ARTIFACTID' 对应库版本.
-本地仓库位置可以通过 `comapny-pom-maven-user-local-repository' 值设置。"
-  (company-pom--directories
-   (concat company-pom-maven-user-local-repository (string-replace "." "/" groupId) "/" artifactId)))
-
-(defcustom company-pom-candidates-match-model 'prefix
-  "`company-pom' 候选结果搜索模式.
-'split 根据 . 号拆分，每个 segment 匹配 GroupId.
-'prefix 精确匹配前缀， 默认匹配模式。"
-  :type 'symbol
-  :group 'company-pom)
-
-(defun company-pom--get-groupId-candidates (prompt)
-  "根据 `PROMPT' 获取 GroupId 候选结果.
-具体匹配模式可以参见`company-pom-candidates-match-model' 变量"
-  (unless company-pom-groupId-cache
-    (setq company-pom-groupId-cache (company-pom--search-groupId)))
-  (-filter (lambda (groupId)
-             (cond ((equal company-pom-candidates-match-model 'split)
-                    (--some (string-match-p it groupId)
-                            (if (s-contains-p "." prompt)
-                                (s-split "\\." prompt 'omit-nulls)
-                              (list prompt))))
-                   (t (s-prefix? prompt groupId))))
-           company-pom-groupId-cache))
-
 
 (provide 'company-pom)
 ;;; company-pom.el ends here
