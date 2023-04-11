@@ -67,6 +67,14 @@
   "<dependency>[ \n\t]*<groupId>\\([a-zA-Z0-9-_. ]*\\)</groupId>[ \n\t]*<artifactId>\\([a-zA-Z0-9-_. ]*\\)</artifactId>[ \n\t]*<version>\\([a-zA-Z0-9-_. ]*\\)</version>[ \n\t]*</dependency>"
   "Maven Dependency 标签每个子标签值正则表达式.")
 
+(defun company-pom--update-groupId-cache-timer ()
+  "GroupId 缓存更新定时任务."
+  (when company-pom-local-groupId-cache-switch
+    (run-with-idle-timer 0 company-pom-local-groupId-cache-interval
+                         (lambda ()
+                           (setq company-pom-groupId-cache (company-pom--search-groupId))))))
+
+
 (defun company-pom--resolve-existing-dependency ()
   "解析当前 pom.xml 文件已经配置的 dependencies."
   (let ((matches '())
@@ -77,7 +85,8 @@
         (when (or (> pos (match-end 0)) (< pos (match-beginning 0)))
           (push (s-join "|" (list (match-string-no-properties 1)
                                   (match-string-no-properties 2)
-                                  (match-string-no-properties 3))) matches))))
+                                  (match-string-no-properties 3)))
+                matches))))
     matches))
 
 (defconst company-pom--artifactId-plus-version-plus-pom-file-regex "\\(\\/[^/]*\\)\\{3\\}\\.pom$"
@@ -97,33 +106,40 @@
                 (lambda (dir) (not (-contains? company-pom-ignored-directories (f-filename dir))))))
       (f-uniquify (f-directories root)))))
 
-(defun company-pom--search-groupId ()
+(defun company-pom--group-with-cache (prefix)
   "搜索本地仓库中的 groupId.
 本地仓库位置可以通过 `comapny-pom-maven-user-local-repository`值设置。"
-  (delete-dups
-   (--map (s-replace "/" "." (s-left (car (car (s-matched-positions-all company-pom--artifactId-plus-version-plus-pom-file-regex it))) it))
-          (--map (s-chop-left (length (f-full company-pom-maven-user-local-repository)) it)
-                 (f-files company-pom-maven-user-local-repository  (lambda (pom-file) (and (s-matches? "\\.pom$" pom-file)
-                                                                                           (not (s-contains? ".cache" pom-file)))) t)))))
+  (when (or company-pom-groupId-cache (null company-pom-groupId-cache))
+    (setq company-pom-groupId-cache (delete-dups
+                                     (--map (s-replace "/" "." (s-left (car (car (s-matched-positions-all company-pom--artifactId-plus-version-plus-pom-file-regex it))) it))
+                                            (--map (s-chop-left (length (f-full company-pom-maven-user-local-repository)) it)
+                                                   (f-files company-pom-maven-user-local-repository  (lambda (pom-file) (and (s-matches? "\\.pom$" pom-file)))))))))
 
-(defun company-pom--update-groupId-cache-timer ()
-  "GroupId 缓存更新定时任务."
-  (when company-pom-local-groupId-cache-switch
-    (run-with-idle-timer 0 company-pom-local-groupId-cache-interval
-                         (lambda ()
-                           (setq company-pom-groupId-cache (company-pom--search-groupId))))))
+  (if (not (s-blank? prefix))
+      (--filter (s-prefix? prefix it) company-pom-groupId-cache)
+    company-pom-groupId-cache))
 
+(defun company-pom--sub-directories-with-prefix (parent &optional prefix)
+  "获取 `PARENT' 目录下所有以 `PREFIX' 为前缀的目录名称.
+如果 `PARENT' 为 'nil' 或者不是 'string' 将什么也不返回。
+如果 `PREFIX' 为 'nil' 将返回所有目录的名称。"
+  (when (and parent (stringp parent) (f-exists? parent))
+    (--filter (s-prefix? (if prefix prefix "") it)
+              (f-uniquify (f-directories parent)))))
 
-(defun company-pom--dependency-entries (&optional groupId artifactId)
+(defun company-pom--artifactId (groupId artifactId)
   "根据 `GROUPID' + `ARTIFACTID' 获取候选结果."
-  (if (not (s-blank? groupId))
-      (let ((parent (concat company-pom-maven-user-local-repository (s-replace "."  "/" groupId) "/" artifactId)))
-        (message "%s" parent)
-        (when (f-exists-p parent)
-          (f-uniquify (f-directories parent))))
-    (if (or company-pom-groupId-cache (null company-pom-groupId-cache))
-        (setq company-pom-groupId-cache (company-pom--search-groupId))
-      company-pom-groupId-cache)))
+  (when (not (s-blank? groupId))
+    (company-pom--sub-directories-with-prefix
+     (f-join "/" company-pom-maven-user-local-repository (s-replace "."  "/" groupId))
+     artifactId)))
+
+(defun company-pom--version (groupId artifactId version)
+  "根据 `GROUPID' + `ARTIFACTID' + `VERSION' 获取候选结果."
+  (when (not (or (s-blank? groupId) (s-blank? artifactId)))
+    (company-pom--sub-directories-with-prefix
+     (f-join "/" company-pom-maven-user-local-repository (s-replace "." "/" groupId) artifactId)
+     version)))
 
 (defun company-pom--grab-dependency-prefix ()
   "获取当前位置的前缀 ."
@@ -133,28 +149,24 @@
 (defun company-pom--dependency-cnadidates (prefix)
   "根据 `PREFIX' 用于 `company-mode' 获取依赖候选项."
   (let* ((tag (when (looking-back company-pom-prefix-regex) (match-string-no-properties 1))))
-    (--filter (s-prefix? prefix it)
-              (pcase tag
-                ("groupId"
-                 (if (eq company-pom-groupId-completion-type 'split)
-                     (company-pom--groupId-with-split prefix)
-                   (company-pom--dependency-entries)))
+    (pcase tag
+      ("groupId"
+       (if (eq company-pom-groupId-completion-type 'split)
+           (company-pom--groupId-with-split prefix)
+         (company-pom--groupId-with-cache prefix)))
 
-                ("artifactId"
-                 (when (looking-back (concat company-pom-tag-regex company-pom-prefix-regex))
-                   (company-pom--dependency-entries
-                    (match-string-no-properties 1))))
+      ("artifactId"
+       (when (looking-back (concat company-pom-tag-regex company-pom-prefix-regex))
+         (company-pom--artifactId
+          (match-string-no-properties 1) prefix)))
 
-                ("version"
-                 (when (looking-back
-                        (concat company-pom-tag-regex
-                                company-pom-tag-regex
-                                company-pom-prefix-regex))
-                   (company-pom--dependency-entries
-                    (match-string-no-properties 1)
-                    (match-string-no-properties 2))))
-
-                (_ nil)))))
+      ("version"
+       (when (looking-back (concat company-pom-tag-regex
+                                   company-pom-tag-regex
+                                   company-pom-prefix-regex))
+         (company-pom--version (match-string-no-properties 1)
+                               (match-string-no-properties 2) prefix)))
+      (_ nil))))
 
 ;;;###autoload
 (defun company-pom (command &optional arg &rest ignored)
