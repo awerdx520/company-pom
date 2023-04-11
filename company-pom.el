@@ -41,7 +41,7 @@
   :type 'integer
   :group 'company-pom)
 
-(defcustom company-pom-ignored-directories '(".cache" )
+(defcustom company-pom-ignored-directories '(".cache" ".meta")
   "忽略不检索的文件夹." )
 
 (defcustom company-pom-groupId-completion-type 'split
