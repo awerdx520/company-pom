@@ -55,6 +55,9 @@
 将 group Id 相关信息缓存上，加快补全速度。这个缓存将
 会在固定时间自动更新或者手动更新。")
 
+(defvar company-pom--local-existing-groupId-hash-table (make-hash-table :test 'equal)
+  "TODO")
+
 (defvar company-pom-tag-regex
   "<[[:alpha:]]+>[[:space:]]*\\([a-zA-Z0-9-_.]*\\)[[:space:]]*</[[:alpha:]]+>[\n \t]*"
   "标签匹配正则表达式.")
@@ -62,6 +65,8 @@
 (defvar company-pom-prefix-regex  "<\\([[:alpha:]]+\\)>\\([a-zA-Z0-9-_. ]*\\)"
   "当前 `point' 前缀+标签正则表达式.")
 
+(defconst company-pom--artifactId-plus-version-plus-pom-file-regex "\\(\\/[^/]*\\)\\{3\\}\\.pom$"
+  "确定一个库的位置的正则表达式.")
 
 (defvar company-pom-dependency-items-regexp
   "<dependency>[ \n\t]*<groupId>\\([a-zA-Z0-9-_. ]*\\)</groupId>[ \n\t]*<artifactId>\\([a-zA-Z0-9-_. ]*\\)</artifactId>[ \n\t]*<version>\\([a-zA-Z0-9-_. ]*\\)</version>[ \n\t]*</dependency>"
@@ -89,8 +94,11 @@
                 matches))))
     matches))
 
-(defconst company-pom--artifactId-plus-version-plus-pom-file-regex "\\(\\/[^/]*\\)\\{3\\}\\.pom$"
-  "确定一个库的位置的正则表达式.")
+(defun company-pom--check-groupId-exists (groupId)
+  ""
+  (cond ((gethash groupId company-pom--local-existing-groupId-hash-table) t)
+        ())
+  )
 
 (defun company-pom--groupId-with-split(prefix)
   "将 `PREFIX' 根据 '.' 分成不同的目录匹配项来匹配 groupId."
@@ -106,14 +114,24 @@
                 (lambda (dir) (not (-contains? company-pom-ignored-directories (f-filename dir))))))
       (f-uniquify (f-directories root)))))
 
-(defun company-pom--group-with-cache (prefix)
-  "搜索本地仓库中的 groupId.
-本地仓库位置可以通过 `comapny-pom-maven-user-local-repository`值设置。"
+(defun company-pom--search-local-groupId ()
+  "搜索本地 `company-pom-maven-user-local-repository' 仓库下的 groupid."
+  (delete-dups
+   (--map (s-replace "/" "." (s-left (car (car (s-matched-positions-all company-pom--artifactId-plus-version-plus-pom-file-regex it))) it))
+          (--map (s-chop-left (length (f-full company-pom-maven-user-local-repository)) it)
+                 (f-files company-pom-maven-user-local-repository  (lambda (pom) (and (s-matches? "\\.pom$" pom))) t)))))
+
+(defun company-pom--search-central-groupId ()
+  "")
+
+(defun company-pom--groupId-with-cache (prefix)
+  "匹配本地仓库中所有以 `PREFIX' 开头的 groupId 值.
+如果 `PREFIX' 为 'nil' 将返回本地所有的 groupId 值。
+本地仓库位置可以通过 'company-pom-maven-user-local-repository'值设置。"
   (when (or company-pom-groupId-cache (null company-pom-groupId-cache))
-    (setq company-pom-groupId-cache (delete-dups
-                                     (--map (s-replace "/" "." (s-left (car (car (s-matched-positions-all company-pom--artifactId-plus-version-plus-pom-file-regex it))) it))
-                                            (--map (s-chop-left (length (f-full company-pom-maven-user-local-repository)) it)
-                                                   (f-files company-pom-maven-user-local-repository  (lambda (pom-file) (and (s-matches? "\\.pom$" pom-file)))))))))
+    (let ((groupId-list (company-pom--search-local-groupId)))
+      (setq company-pom-groupId-cache groupId-list)
+      (--each groupId-list (puthash it t company-pom--local-existing-groupId-hash-table))))
 
   (if (not (s-blank? prefix))
       (--filter (s-prefix? prefix it) company-pom-groupId-cache)
@@ -182,7 +200,9 @@
 (defun company-pom-update-groupId-cache ()
   "更新 Maven GroupId 缓存."
   (interactive)
-  (setq company-pom-groupId-cache (company-pom--search-groupId)))
+  (let ((groupId-list (company-pom--search-local-groupId)))
+    (setq company-pom-groupId-cache groupId-list)
+    (--each groupId-list (puthash it t company-pom--local-existing-groupId-hash-table))))
 
 (provide 'company-pom)
 ;;; company-pom.el ends here
